@@ -62,6 +62,34 @@
 /** \brief PGN for an Configuration Information message */
 #define N2kPGNConfigurationInformation 126998L
 
+//*****************************************************************************
+// CZONE (Mastervolt/Power Products) proprietary protocol constants
+//*****************************************************************************
+/** \brief CZONE proprietary message header byte 1 (0x93) */
+#define N2kCZoneProprietaryHeader1 0x93
+/** \brief CZONE proprietary message header byte 2 (0x13) */
+#define N2kCZoneProprietaryHeader2 0x13
+/** \brief Minimum length for CZONE proprietary message (header + offset + src + dst) */
+#define N2kCZoneProprietaryMinLen 5
+
+/** \brief CZONE proprietary PGN base (proprietary range start) */
+#define N2kCZonePGNBase 65280L
+/** \brief CZONE PGN for switch bank status reports */
+#define N2kCZonePGNSwitchStatus 65282L
+/** \brief CZONE PGN for switch control commands */
+#define N2kCZonePGNSwitchControl 65283L
+/** \brief CZONE PGN for configuration messages */
+#define N2kCZonePGNConfiguration 65284L
+
+/** \brief CZONE primary switch bank device address */
+#define N2kCZonePrimarySwitchBank 0x46
+/** \brief CZONE supporting module device address 1 */
+#define N2kCZoneModule1 0x13
+/** \brief CZONE supporting module device address 2 */
+#define N2kCZoneModule2 0x19
+/** \brief CZONE supporting module device address 3 */
+#define N2kCZoneModule3 0x12
+
 // Document says for lengths 33,40,24,32, but then values
 // has not been translated right on devices.
 /** \brief Max length of ModelID
@@ -1281,6 +1309,46 @@ protected:
      * \return uint8_t  -> Index of the CAN message on \ref N2kCANMsgBuf
      */
     uint8_t SetN2kCANBufMsg(unsigned long canId, unsigned char len, unsigned char *buf);
+
+    /*********************************************************************//**
+     * \brief Check if CAN frame data contains CZONE proprietary format
+     * 
+     * Checks if the raw CAN frame data starts with CZONE proprietary header
+     * (0x93 0x13) and has minimum required length for CZONE message.
+     * 
+     * \param buf       Raw CAN frame data buffer
+     * \param len       Length of data in buffer
+     * \retval true     Data contains CZONE proprietary format
+     * \retval false    Data is not CZONE proprietary format
+     */
+    bool IsCZoneProprietaryFrame(const unsigned char *buf, unsigned char len);
+
+    /*********************************************************************//**
+     * \brief Convert CZONE proprietary frame to standard NMEA2000 message
+     * 
+     * Parses CZONE proprietary format (93 13 XX SS DD [data...]) and creates
+     * a standard tN2kMsg object that can be processed by normal NMEA2000 handlers.
+     * 
+     * \param canId     Original CAN ID from hardware
+     * \param buf       Raw CZONE frame data
+     * \param len       Length of frame data
+     * \param N2kMsg    Output: Converted NMEA2000 message
+     * \retval true     Conversion successful
+     * \retval false    Conversion failed (invalid format)
+     */
+    bool ConvertCZoneFrameToN2kMsg(unsigned long canId, const unsigned char *buf, unsigned char len, tN2kMsg &N2kMsg);
+
+    /*********************************************************************//**
+     * \brief Check if source address is a known CZONE device
+     * 
+     * Determines if the given source address matches any of the discovered
+     * CZONE device addresses from network analysis.
+     * 
+     * \param Source    Source address to check
+     * \retval true     Source is known CZONE device
+     * \retval false    Source is not CZONE device
+     */
+    bool IsCZoneDevice(unsigned char Source);
 
     /*********************************************************************//**
      * \brief Check if this PNG is a fast packet message

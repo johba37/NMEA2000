@@ -2024,7 +2024,27 @@ uint8_t tNMEA2000::SetN2kCANBufMsg(unsigned long canId, unsigned char len, unsig
   bool KnownMessage;
   uint8_t MsgIndex=MaxN2kCANMsgs;
 
-    CanIdToN2k(canId,Priority,PGN,Source,Destination);
+  // Check for CZONE proprietary format first, before standard NMEA2000 processing
+  if (IsCZoneProprietaryFrame(buf, len)) {
+    tN2kMsg czoneMsg;
+    if (ConvertCZoneFrameToN2kMsg(canId, buf, len, czoneMsg)) {
+      // Find free slot for converted CZONE message
+      for (MsgIndex=0; MsgIndex<MaxN2kCANMsgs && N2kCANMsgBuf[MsgIndex].FreeMsg==false; MsgIndex++);
+      if (MsgIndex<MaxN2kCANMsgs) {
+        N2kCANMsgBuf[MsgIndex].N2kMsg = czoneMsg;
+        N2kCANMsgBuf[MsgIndex].SystemMessage = false;
+        N2kCANMsgBuf[MsgIndex].KnownMessage = true;  // CZONE messages are always "known" to us
+        N2kCANMsgBuf[MsgIndex].FreeMsg = false;
+        N2kMsgRxDbgStart(" - CZONE message converted, MsgIndex: "); N2kMsgRxDbgln(MsgIndex);
+        return MsgIndex;
+      }
+    }
+    // If CZONE conversion failed or no buffer space, skip this frame
+    return MaxN2kCANMsgs;
+  }
+
+  // Continue with standard NMEA2000 processing for non-CZONE messages
+  CanIdToN2k(canId,Priority,PGN,Source,Destination);
 #if !defined(N2K_NO_ISO_MULTI_PACKET_SUPPORT)
     if ( !TestHandleTPMessage(PGN,Source,Destination,len,buf,MsgIndex) )
 #endif
@@ -2979,3 +2999,57 @@ void SetN2kPGN126993(tN2kMsg &N2kMsg, uint32_t timeInterval_ms, uint8_t sequence
 	N2kMsg.Add4ByteUInt(0xffffffff); // Reserved
 }
 #endif
+
+//*****************************************************************************
+// CZONE (Mastervolt/Power Products) proprietary protocol support functions
+//*****************************************************************************
+
+bool tNMEA2000::IsCZoneProprietaryFrame(const unsigned char *buf, unsigned char len) {
+  // Check minimum length and CZONE proprietary header
+  if (len < N2kCZoneProprietaryMinLen) return false;
+  
+  return (buf[0] == N2kCZoneProprietaryHeader1 && 
+          buf[1] == N2kCZoneProprietaryHeader2 &&
+          buf[2] >= 0x02 && buf[2] <= 0x07);  // Valid PGN offset range
+}
+
+bool tNMEA2000::ConvertCZoneFrameToN2kMsg(unsigned long canId, const unsigned char *buf, unsigned char len, tN2kMsg &N2kMsg) {
+  if (!IsCZoneProprietaryFrame(buf, len)) return false;
+  if (len < N2kCZoneProprietaryMinLen) return false;
+  
+  // Parse CZONE proprietary format: 93 13 XX SS DD [data...]
+  unsigned long pgnOffset = buf[2];
+  unsigned char czoneSource = buf[3];
+  unsigned char czoneDestination = buf[4];
+  
+  // Convert to standard NMEA2000 message format
+  N2kMsg.SetPGN(N2kCZonePGNBase + pgnOffset);  // PGN 65282-65287
+  N2kMsg.Source = czoneSource;
+  N2kMsg.Destination = czoneDestination;
+  N2kMsg.Priority = 6;  // Medium priority for switch bank messages
+  
+  // Copy payload data (everything after the CZONE header)
+  if (len > N2kCZoneProprietaryMinLen) {
+    N2kMsg.DataLen = len - N2kCZoneProprietaryMinLen;
+    for (int i = 0; i < N2kMsg.DataLen; i++) {
+      N2kMsg.Data[i] = buf[N2kCZoneProprietaryMinLen + i];
+    }
+  } else {
+    N2kMsg.DataLen = 0;
+  }
+  
+  N2kMsgRxDbgStart(" - CZONE conversion: PGN "); N2kMsgRxDbg(N2kMsg.PGN); 
+  N2kMsgRxDbg(" Src:0x"); N2kMsgRxDbg(czoneSource, HEX);
+  N2kMsgRxDbg(" Dst:0x"); N2kMsgRxDbg(czoneDestination, HEX);
+  N2kMsgRxDbg(" Len:"); N2kMsgRxDbgln(N2kMsg.DataLen);
+  
+  return true;
+}
+
+bool tNMEA2000::IsCZoneDevice(unsigned char Source) {
+  // Check against known CZONE device addresses discovered through network analysis
+  return (Source == N2kCZonePrimarySwitchBank ||
+          Source == N2kCZoneModule1 ||
+          Source == N2kCZoneModule2 ||
+          Source == N2kCZoneModule3);
+}

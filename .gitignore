@@ -46,6 +46,9 @@ Temporary Items
 build
 tags
 
+# CZONE development data
+/czone_data/
+
 # Added by Matthias
 build/*
 Documents/tmp/
@@ -64,3 +67,5 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 *.a
+.claude
+CLAUDE.md
