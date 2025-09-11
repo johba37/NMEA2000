@@ -152,10 +152,30 @@ struct CZoneParsedMessage {
 // Use the library's tN2kCZoneMessage structure from N2kCZone.h
 using CZoneRawMessage = tN2kCZoneMessage;
 
-// Generic parser - now calls library function to eliminate duplication
+// Generic parser - proper implementation based on tN2kCZoneMessage structure
 bool ParseCZoneMessage(const unsigned char* RawData, int DataLen, CZoneRawMessage &CZoneMsg) {
-    // CZoneRawMessage is typedef'd to tN2kCZoneMessage, so we can call library directly
-    return ParseN2kCZonePGN65282(RawData, DataLen, CZoneMsg);
+    // CZONE messages are exactly 17 bytes
+    if (DataLen != 17) {
+        return false;
+    }
+    
+    // Parse according to tN2kCZoneMessage structure
+    CZoneMsg.DeviceInstance = RawData[0];
+    CZoneMsg.Header = RawData[1];
+    CZoneMsg.DeviceType = RawData[2];
+    
+    // 32-bit little-endian timestamp at bytes 3-6
+    CZoneMsg.Timestamp = RawData[3] | 
+                        (RawData[4] << 8) | 
+                        (RawData[5] << 16) | 
+                        (RawData[6] << 24);
+    
+    CZoneMsg.DataLength = RawData[7];
+    
+    // Copy 9-byte payload (bytes 8-16)
+    memcpy(CZoneMsg.Payload, &RawData[8], 9);
+    
+    return true;
 }
 
 // Type-specific parsing functions - now uses library functions to eliminate duplication
@@ -173,17 +193,38 @@ bool ParseCZoneTypedMessage(const unsigned char* RawData, int DataLen, uint8_t S
     // Type-specific parsing using library functions
     switch(ParsedMsg.MessageType) {
         case N2kCZone_MsgType_Heartbeat:
-            return ParseN2kCZoneHeartbeat(ParsedMsg.data.raw, ParsedMsg.data.heartbeat);
+            // Parse heartbeat message (type 0x09)
+            ParsedMsg.data.heartbeat.DeviceInstance = ParsedMsg.data.raw.DeviceInstance;
+            ParsedMsg.data.heartbeat.Timestamp = ParsedMsg.data.raw.Timestamp;
+            ParsedMsg.data.heartbeat.Counter = ParsedMsg.data.raw.Payload[2];
+            memcpy(ParsedMsg.data.heartbeat.FixedData, &ParsedMsg.data.raw.Payload[3], 6);
+            ParsedMsg.data.heartbeat.Checksum = ParsedMsg.data.raw.Payload[8];
+            return true;
             
         case N2kCZone_MsgType_Extended:
-            return ParseN2kCZoneExtended(ParsedMsg.data.raw, ParsedMsg.data.extended);
+            // Parse extended message (type 0x24)
+            ParsedMsg.data.extended.DeviceInstance = ParsedMsg.data.raw.DeviceInstance;
+            ParsedMsg.data.extended.Timestamp = ParsedMsg.data.raw.Timestamp;
+            ParsedMsg.data.extended.SequenceCounter = ParsedMsg.data.raw.Payload[0] | (ParsedMsg.data.raw.Payload[1] << 8);
+            memcpy(ParsedMsg.data.extended.Data, &ParsedMsg.data.raw.Payload[2], 7);
+            ParsedMsg.data.extended.Checksum = ParsedMsg.data.raw.Payload[8];
+            return true;
             
         case N2kCZone_MsgType_SwitchState:
-            return ParseN2kCZoneSwitchState(ParsedMsg.data.raw, ParsedMsg.data.switchState);
+            // Parse switch state message (type 0x64)
+            ParsedMsg.data.switchState.DeviceInstance = ParsedMsg.data.raw.DeviceInstance;
+            ParsedMsg.data.switchState.Timestamp = ParsedMsg.data.raw.Timestamp;
+            memcpy(ParsedMsg.data.switchState.Payload, ParsedMsg.data.raw.Payload, 9);
+            return true;
             
         case N2kCZone_MsgType_Control:
             // Use switch state structure for type 0x23 as they have similar payload
-            return ParseN2kCZoneSwitchState(ParsedMsg.data.raw, ParsedMsg.data.unknown23);
+            // Parse type 23 message (control message)
+            // Use same structure as switch state for now since format is unknown
+            ParsedMsg.data.unknown23.DeviceInstance = ParsedMsg.data.raw.DeviceInstance;
+            ParsedMsg.data.unknown23.Timestamp = ParsedMsg.data.raw.Timestamp;
+            memcpy(ParsedMsg.data.unknown23.Payload, ParsedMsg.data.raw.Payload, 9);
+            return true;
             
         default:
             // Raw data already parsed above
@@ -193,7 +234,14 @@ bool ParseCZoneTypedMessage(const unsigned char* RawData, int DataLen, uint8_t S
 
 // Helper function to get message type name - now calls library function
 const char* GetCZoneMessageTypeName(uint8_t msgType) {
-    return N2kCZoneGetMessageTypeName(msgType);
+    // Simple message type name mapping
+    switch (msgType) {
+        case 0x09: return "Heartbeat";
+        case 0x23: return "Type23";
+        case 0x24: return "Extended";
+        case 0x64: return "Type64";
+        default: return "Unknown";
+    }
 }
 
 // Helper to print parsed message
@@ -968,6 +1016,12 @@ public:
     }
     
     bool IsKnownNonSwitchPGN(uint32_t pgn) {
+        // NOTE: This function was originally used to filter out "noise" PGNs
+        // to focus on CZONE traffic. To allow analysis of ALL PGNs, this function
+        // now returns false for all PGNs, effectively disabling the filter.
+        // The original filtering logic is preserved in comments for reference.
+        
+        /* ORIGINAL FILTERING LOGIC (now disabled):
         // Weather station PGNs
         if (pgn == 130323) return true;  // Meteorological Station Data
         if (pgn == 130306) return true;  // Wind Data
@@ -980,7 +1034,7 @@ public:
         
         // Navigation/GNSS PGNs
         if (pgn == 129029) return true;  // GNSS Position Data
-        if (pgn == 129025) return true;  // Position Rapid Update
+        if (pgn == 129025) return true;  // Position Update
         if (pgn == 129026) return true;  // COG & SOG Rapid Update
         if (pgn == 129033) return true;  // Local Time Offset
         if (pgn == 129539) return true;  // GNSS DOPs
@@ -1008,8 +1062,9 @@ public:
         if (pgn == 60928) return true;   // ISO Address Claim
         if (pgn == 59904) return true;   // ISO Request
         if (pgn == 59392) return true;   // ISO Acknowledgment
+        */
         
-        return false; // Not a known non-switch PGN
+        return false; // Allow ALL PGNs through (filtering disabled)
     }
     
     bool IsPotentialCZONEMessage(const N2KMessage& msg) {
@@ -1309,6 +1364,7 @@ int main(int argc, char* argv[]) {
     int switch_num = -1;
     uint8_t switch_command = 0;
     int switch_dest = 0x12;  // Default to switch bank 1
+    int switch_bank = 0;     // Default to bank 0 for standard NMEA2000
     int target_pgn = -1;      // Filter by PGN (-1 = all)
     int target_msg_type = -1; // Filter by CZONE message type (-1 = all)
     
@@ -1384,6 +1440,13 @@ int main(int argc, char* argv[]) {
                 switch_dest = std::stoi(argv[++i], nullptr, 0);
             } else {
                 std::cerr << "Error: --switch-dest requires a device ID" << std::endl;
+                return 1;
+            }
+        } else if (arg == "--bank") {
+            if (i + 1 < argc) {
+                switch_bank = std::stoi(argv[++i]);
+            } else {
+                std::cerr << "Error: --bank requires a bank number (0-based)" << std::endl;
                 return 1;
             }
         } else if (arg == "--pgn") {
@@ -1493,6 +1556,13 @@ int main(int argc, char* argv[]) {
     
     if (!quiet) {
         std::cout << "Connected to NGT-1" << std::endl << std::endl;
+        
+        // Check NGT-1 configuration and show warnings
+        tNMEA2000_NGT1* ngt1 = dynamic_cast<tNMEA2000_NGT1*>(&NMEA2000);
+        if (ngt1) {
+            ngt1->CheckNGT1Status();
+            ngt1->PrintNGT1Warnings();
+        }
     }
     
     // Handle different modes
@@ -1526,27 +1596,49 @@ int main(int argc, char* argv[]) {
                 return 1;
         }
         
-        // TEST: First try a standard PGN to verify NGT-1 transmission capability
-        std::cout << "Testing NGT-1 transmission with standard PGN 127508 (DC Battery Status)..." << std::endl;
+        // Send standard NMEA2000 PGN 127502 - Switch Bank Control
+        std::cout << "Sending standard NMEA2000 PGN 127502 (Switch Bank Control)..." << std::endl;
         
-        tN2kMsg TestMsg;
-        TestMsg.SetPGN(127508);  // PGN 127508 - DC Battery Status (standard PGN)
-        TestMsg.Priority = 6;
-        TestMsg.Source = 0x03;
-        TestMsg.Destination = 0xFF;  // Broadcast
+        tN2kMsg SwitchMsg;
+        SwitchMsg.SetPGN(127502);  // PGN 127502 - Switch Bank Control
+        SwitchMsg.Priority = 3;
+        SwitchMsg.Source = 0x05;  // Our unique address
+        SwitchMsg.Destination = 0xFF;  // Broadcast
         
-        // Simple battery status message (8 bytes)
-        TestMsg.AddByte(0x01);  // Battery Instance
-        TestMsg.AddByte(0xFF);  // Voltage (invalid - just testing)
-        TestMsg.AddByte(0xFF);
-        TestMsg.AddByte(0xFF);  // Current (invalid)
-        TestMsg.AddByte(0xFF);
-        TestMsg.AddByte(0xFF);  // Temperature (invalid)
-        TestMsg.AddByte(0xFF);
-        TestMsg.AddByte(0x00);  // SID
+        // PGN 127502 format:
+        // Byte 0: SID (Sequence ID)
+        // Byte 1: Switch Bank Instance (0 = bank 0, 1 = bank 1, etc.)
+        // Bytes 2-5: Switch status pairs (2 bits per switch)
+        //   00 = Off, 01 = On, 10 = Error, 11 = Unavailable
         
-        bool testResult = NMEA2000.SendMsg(TestMsg);
-        std::cout << "Standard PGN test result: " << (testResult ? "SUCCESS" : "FAILED") << std::endl;
+        SwitchMsg.AddByte(0x00);  // SID
+        SwitchMsg.AddByte(switch_bank);  // Bank number (0-based)
+        
+        // Build switch status bytes (2 bits per switch, 4 switches per byte)
+        // For turning off switch 4 (index 3), set bits 6-7 of byte 2 to 00
+        unsigned char switchStates[4] = {0xFF, 0xFF, 0xFF, 0xFF}; // All unavailable by default
+        
+        // Calculate which byte and bit position for the switch
+        int switchIndex = switch_num - 1;  // Convert to 0-based
+        int byteIndex = switchIndex / 4;
+        int bitPosition = (switchIndex % 4) * 2;
+        
+        // Clear the 2 bits for this switch and set new state
+        switchStates[byteIndex] &= ~(0x03 << bitPosition);  // Clear bits
+        if (switch_command == CZone::SWITCH_CMD_ON) {
+            switchStates[byteIndex] |= (0x01 << bitPosition);  // Set to On
+        }
+        // Off = 0x00, so no need to set bits for OFF command
+        
+        SwitchMsg.AddByte(switchStates[0]);
+        SwitchMsg.AddByte(switchStates[1]);
+        SwitchMsg.AddByte(switchStates[2]);
+        SwitchMsg.AddByte(switchStates[3]);
+        
+        bool standardResult = NMEA2000.SendMsg(SwitchMsg);
+        std::cout << "Standard PGN 127502 result: " << (standardResult ? "SUCCESS" : "FAILED") << std::endl;
+        std::cout << "Sent to Bank " << switch_bank << ", Switch " << switch_num 
+                  << " -> " << (switch_command == CZone::SWITCH_CMD_ON ? "ON" : "OFF") << std::endl;
         
         usleep(500000);  // Wait 500ms between messages
         

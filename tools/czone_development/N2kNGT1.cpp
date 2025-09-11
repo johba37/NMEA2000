@@ -11,6 +11,7 @@ Minimal NMEA2000 transport implementation for NGT-1 via serial port
 #include <fcntl.h>
 #include <termios.h>
 #include <cstring>
+#include <vector>
 
 // NGT-1 protocol constants
 const unsigned char DLE = 0x10;
@@ -45,7 +46,7 @@ tNMEA2000_NGT1::tNMEA2000_NGT1(const char* port) : tNMEA2000(), port_name(port),
                         );
     
     // Make sure we're not in listen-only mode
-    SetMode(tNMEA2000::N2km_NodeOnly, 0x03); // Set as active node with source 0x03
+    SetMode(tNMEA2000::N2km_NodeOnly, 0x05); // Set as active node with source 0x05
 }
 
 tNMEA2000_NGT1::~tNMEA2000_NGT1() {
@@ -110,49 +111,187 @@ bool tNMEA2000_NGT1::CANOpen() {
     // Wait for device to be ready
     usleep(200000);  // 200ms
     
-    // Try comprehensive NGT-1 initialization sequence
-    std::cout << "Starting comprehensive NGT-1 initialization..." << std::endl;
+    // Send NGT-1 startup sequence exactly like canboat
+    std::cout << "Sending NGT-1 startup sequence..." << std::endl;
     
-    // STEP 1: Request device info/version
-    std::cout << "Step 1: Requesting device version..." << std::endl;
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(STX);
-    WriteNGT1Byte(0x92);  // Version request command
-    WriteNGT1Byte(0x00);  // Length
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(ETX);
-    usleep(200000);
+    // Canboat NGT_STARTUP_SEQ: {0x11, 0x02, 0x00} via NGT_MSG_SEND (0xA1)
+    unsigned char startup_data[] = {0x11, 0x02, 0x00};
     
-    // STEP 2: Start configuration mode
-    std::cout << "Step 2: Starting configuration mode..." << std::endl;
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(STX);
-    WriteNGT1Byte(0x91);  // Start config mode
-    WriteNGT1Byte(0x00);  // Length
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(ETX);
-    usleep(200000);
+    if (!SendNGTMessage(startup_data, sizeof(startup_data))) {
+        std::cerr << "Failed to send NGT-1 startup sequence" << std::endl;
+        return false;
+    }
     
-    // STEP 3: Enable transmission mode
-    std::cout << "Step 3: Enabling transmission mode..." << std::endl;
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(STX);
-    WriteNGT1Byte(0xA3);  // Enable TX mode
-    WriteNGT1Byte(0x01);  // Length
-    WriteNGT1Byte(0x01);  // Enable flag
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(ETX);
-    usleep(200000);
-    
-    // STEP 4: Enable specific PGNs
-    std::cout << "Step 4: Enabling PGN transmission..." << std::endl;
-    // Enable both standard PGN (for testing) and target PGN
-    EnableTxPGN(127508);  // Standard PGN first
-    EnableTxPGN(65280);   // Target PGN
-    
-    std::cout << "NGT-1 initialization sequence completed" << std::endl;
+    usleep(100000);  // Wait for NGT-1 to process
+    std::cout << "NGT-1 initialization completed" << std::endl;
     
     return true;
+}
+
+bool tNMEA2000_NGT1::CheckNGT1Status() {
+    if (serial_fd < 0) {
+        return false;
+    }
+    
+    std::cout << "\n=== NGT-1 Configuration Status Check ===" << std::endl;
+    
+    // Request device version/info using EBL_VERSION command
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(STX);
+    WriteNGT1Byte(0x01);  // EBL_VERSION - version info request
+    WriteNGT1Byte(0x00);  // Length
+    WriteNGT1Byte(0xFF);  // Checksum (command + length + checksum = 0 mod 256)
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(ETX);
+    
+    // Try to read response with timeout
+    usleep(200000);  // 200ms wait for response
+    
+    unsigned char response[256];
+    int bytes_read = 0;
+    bool found_response = false;
+    
+    // Set non-blocking mode temporarily
+    int flags = fcntl(serial_fd, F_GETFL, 0);
+    fcntl(serial_fd, F_SETFL, flags | O_NONBLOCK);
+    
+    // Try to read response for 1 second total
+    for (int i = 0; i < 10 && !found_response; i++) {
+        int n = read(serial_fd, response + bytes_read, sizeof(response) - bytes_read - 1);
+        if (n > 0) {
+            bytes_read += n;
+            // Look for DLE STX pattern in response
+            for (int j = 0; j < bytes_read - 1; j++) {
+                if (response[j] == DLE && response[j+1] == STX) {
+                    found_response = true;
+                    break;
+                }
+            }
+        }
+        if (!found_response) usleep(100000);  // 100ms between attempts
+    }
+    
+    // Restore blocking mode
+    fcntl(serial_fd, F_SETFL, flags);
+    
+    if (found_response && bytes_read > 0) {
+        std::cout << "NGT-1 responded (received " << bytes_read << " bytes)" << std::endl;
+        
+        // Basic response analysis
+        bool has_version_response = false;
+        for (int i = 0; i < bytes_read - 2; i++) {
+            if (response[i] == DLE && response[i+1] == STX && response[i+2] == 0x01) {
+                has_version_response = true;
+                break;
+            }
+        }
+        
+        if (has_version_response) {
+            std::cout << "✓ NGT-1 version command responded correctly" << std::endl;
+        } else {
+            std::cout << "⚠ NGT-1 response format unexpected" << std::endl;
+        }
+    } else {
+        std::cout << "⚠ NGT-1 did not respond to status request" << std::endl;
+        std::cout << "  This may indicate communication issues or firmware problems" << std::endl;
+    }
+    
+    return found_response;
+}
+
+bool tNMEA2000_NGT1::SendActisenseMessage(unsigned char command, unsigned long pgn, unsigned char dst, 
+                                       unsigned char src, unsigned char priority, const unsigned char* data, int len) {
+    if (serial_fd < 0) {
+        return false;
+    }
+    
+    // Build Actisense message format: [command] [length] [priority] [PGN_low] [PGN_mid] [PGN_high] [dst] [src] [time_low] [time_high] [len] [data...]
+    unsigned char message[256];
+    int pos = 0;
+    
+    message[pos++] = command;  // Command (0x94 for N2K_MSG_SEND)
+    
+    // Total length (will be filled in later)  
+    int length_pos = pos++;
+    
+    // Priority
+    message[pos++] = priority;
+    
+    // PGN (3 bytes, little-endian)
+    message[pos++] = pgn & 0xFF;
+    message[pos++] = (pgn >> 8) & 0xFF;  
+    message[pos++] = (pgn >> 16) & 0xFF;
+    
+    // Destination
+    message[pos++] = dst;
+    
+    // Source 
+    message[pos++] = src;
+    
+    // Timestamp (not used, set to 0xFF)
+    message[pos++] = 0xFF;
+    message[pos++] = 0xFF;
+    
+    // Data length
+    message[pos++] = len;
+    
+    // Data payload
+    for (int i = 0; i < len; i++) {
+        message[pos++] = data[i];
+    }
+    
+    // Set total length
+    message[length_pos] = pos - 2;  // Length doesn't include command and length bytes
+    
+    // Send with DLE/STX/ETX framing
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(STX);
+    WriteNGT1Bytes(message, pos);
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(ETX);
+    
+    return true;
+}
+
+bool tNMEA2000_NGT1::SendActisenseCommand(unsigned char command, const unsigned char* data, int len) {
+    if (serial_fd < 0) {
+        return false;
+    }
+    
+    // Build simple Actisense command format: [command] [length] [data...]
+    unsigned char message[256];
+    int pos = 0;
+    
+    message[pos++] = command;  // Command (0xA1 for NGT_MSG_SEND)
+    message[pos++] = len;      // Data length
+    
+    // Data payload
+    for (int i = 0; i < len; i++) {
+        message[pos++] = data[i];
+    }
+    
+    // Send with DLE/STX/ETX framing
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(STX);
+    WriteNGT1Bytes(message, pos);
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(ETX);
+    
+    return true;
+}
+
+bool tNMEA2000_NGT1::SendMessage(unsigned long pgn, unsigned char dst, const unsigned char* data, int len) {
+    // Use canboat-compatible N2K_MSG_SEND (0x94) for NMEA2000 messages
+    return SendActisenseMessage(0x94, pgn, dst, 0x05, 0x06, data, len);
+}
+
+bool tNMEA2000_NGT1::SendNGTMessage(const unsigned char* data, int len) {
+    // Use NGT_MSG_SEND (0xA1) for NGT-specific commands like startup
+    return SendActisenseCommand(0xA1, data, len);
+}
+
+void tNMEA2000_NGT1::PrintNGT1Warnings() {
+    std::cout << "NGT-1 may require Actisense software configuration for PGN transmission" << std::endl;
 }
 
 // CANClose is not virtual - handle cleanup in destructor
@@ -180,7 +319,7 @@ bool tNMEA2000_NGT1::CANSendFrame(unsigned long id, unsigned char len, const uns
         std::cout << "Sending CZONE message: PGN " << pgn << ", src: 0x" << std::hex << (int)src 
                   << ", dst: 0x" << (int)dst << std::dec << ", len: " << (int)len << std::endl;
     }
-    return SendNGT1Frame(pgn, src, dst, priority, buf, len);
+    return SendActisenseMessage(0x94, pgn, dst, src, priority, buf, len);
 }
 
 bool tNMEA2000_NGT1::CANGetFrame(unsigned long &id, unsigned char &len, unsigned char *buf) {
@@ -189,57 +328,6 @@ bool tNMEA2000_NGT1::CANGetFrame(unsigned long &id, unsigned char &len, unsigned
     return false;
 }
 
-bool tNMEA2000_NGT1::SendNGT1Frame(unsigned long pgn, unsigned char src, unsigned char dst, 
-                                   unsigned char priority, const unsigned char* data, unsigned char len) {
-    // Build NGT-1 transmit message: A0 [length] [priority] [PGN_low] [PGN_mid] [PGN_high] [dst] [src] [time_low] [time_high] [len] [data...]
-    
-    unsigned char message[256];
-    int pos = 0;
-    
-    // NGT-1 transmit command
-    message[pos++] = 0xA0;
-    
-    // Total length (will be filled in later)  
-    int length_pos = pos++;
-    
-    // Priority
-    message[pos++] = priority;
-    
-    // PGN (3 bytes, little-endian)
-    message[pos++] = pgn & 0xFF;
-    message[pos++] = (pgn >> 8) & 0xFF;  
-    message[pos++] = (pgn >> 16) & 0xFF;
-    
-    // Destination
-    message[pos++] = dst;
-    
-    // Source (0xFF = let NGT-1 assign)
-    message[pos++] = 0xFF;
-    
-    // Timestamp (not used, set to 0xFF)
-    message[pos++] = 0xFF;
-    message[pos++] = 0xFF;
-    
-    // Data length
-    message[pos++] = len;
-    
-    // Data payload
-    for (int i = 0; i < len; i++) {
-        message[pos++] = data[i];
-    }
-    
-    // Set total length
-    message[length_pos] = pos - 2;  // Length doesn't include command and length bytes
-    
-    // Send with DLE/STX/ETX framing
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(STX);
-    WriteNGT1Bytes(message, pos);
-    WriteNGT1Byte(DLE);
-    WriteNGT1Byte(ETX);
-    
-    return true;
-}
 
 bool tNMEA2000_NGT1::EnableTxPGN(unsigned long pgn) {
     if (serial_fd < 0) {

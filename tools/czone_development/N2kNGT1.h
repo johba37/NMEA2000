@@ -31,10 +31,19 @@ private:
     std::string port_name;
     int serial_fd;
     
-    // NGT-1 protocol helpers
-    bool SendNGT1Frame(unsigned long pgn, unsigned char src, unsigned char dst, 
-                       unsigned char priority, const unsigned char* data, unsigned char len);
+    // NGT-1 protocol helpers  
     bool EnableTxPGN(unsigned long pgn);
+    bool SendMessage(unsigned long pgn, unsigned char dst, const unsigned char* data, int len);
+    bool SendNGTMessage(const unsigned char* data, int len);
+    bool SendActisenseMessage(unsigned char command, unsigned long pgn, unsigned char dst, 
+                             unsigned char src, unsigned char priority, const unsigned char* data, int len);
+    bool SendActisenseCommand(unsigned char command, const unsigned char* data, int len);
+    
+public:
+    bool CheckNGT1Status();
+    void PrintNGT1Warnings();
+    
+private:
     void WriteNGT1Byte(unsigned char b);
     void WriteNGT1Bytes(const unsigned char* data, int len);
 };

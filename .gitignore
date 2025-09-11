@@ -69,3 +69,4 @@ _deps
 *.a
 .claude
 CLAUDE.md
+tools/czone_development/czone_switch_decoder
