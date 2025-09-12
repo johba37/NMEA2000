@@ -1191,22 +1191,50 @@ private:
             return false;
         }
         
-        // All messages from NGT-1 start with 0x93 (Actisense message type)
-        if (message_buffer[0] != 0x93) {
+        // Messages from NGT-1 can be:
+        // 0x93 = CZONE proprietary messages
+        // 0xA0 = Standard NMEA2000 messages
+        bool is_czone = (message_buffer[0] == 0x93);
+        bool is_n2k = (message_buffer[0] == 0xA0);
+        
+        if (!is_czone && !is_n2k) {
             if (debug_decode && decode_attempts % 100 == 1) {
-                std::cout << "    → REJECTED: Wrong message type (got 0x" << std::hex << (int)message_buffer[0] << std::dec << ", need 0x93)" << std::endl;
+                std::cout << "    → REJECTED: Unknown message type (got 0x" << std::hex << (int)message_buffer[0] << std::dec << ", need 0x93 or 0xA0)" << std::endl;
             }
             return false;
         }
         
-        // Parse standard NMEA2000 format first
+        // Parse based on message type
         msg.timestamp = std::chrono::steady_clock::now();
-        msg.priority = message_buffer[2];
-        msg.pgn = message_buffer[3] | (message_buffer[4] << 8) | (message_buffer[5] << 16);
-        msg.destination = message_buffer[6];
-        msg.source = message_buffer[7];
-        // Bytes 8-9 are timestamp (not used here)
-        msg.data_len = message_buffer[10];
+        
+        if (is_n2k) {
+            // Standard NMEA2000 format from NGT-1 (0xA0)
+            // Format: A0 len pri pgn_low pgn_mid pgn_high dst src [timestamp 4B] data...
+            if (message_buffer.size() < 12) return false;
+            
+            msg.priority = message_buffer[2];
+            msg.pgn = message_buffer[3] | (message_buffer[4] << 8) | (message_buffer[5] << 16);
+            msg.destination = message_buffer[6];
+            msg.source = message_buffer[7];
+            // Bytes 8-11 are timestamp (not used here)
+            msg.data_len = message_buffer[1] - 11; // Length includes header, subtract it
+            
+            // Data starts at byte 12 for standard N2K
+            if (message_buffer.size() < 12 + msg.data_len) return false;
+            memcpy(msg.data, &message_buffer[12], msg.data_len);
+        } else {
+            // CZONE format (0x93)
+            msg.priority = message_buffer[2];
+            msg.pgn = message_buffer[3] | (message_buffer[4] << 8) | (message_buffer[5] << 16);
+            msg.destination = message_buffer[6];
+            msg.source = message_buffer[7];
+            // Bytes 8-9 are timestamp (not used here)
+            msg.data_len = message_buffer[10];
+            
+            // Data starts at byte 11 for CZONE
+            if (message_buffer.size() < 11 + msg.data_len) return false;
+            memcpy(msg.data, &message_buffer[11], msg.data_len);
+        }
         
         if (msg.data_len > 223) {
             if (debug_decode && decode_attempts % 100 == 1) {
@@ -1215,25 +1243,16 @@ private:
             return false;
         }
         
-        if (message_buffer.size() < 11 + msg.data_len) {
-            if (debug_decode && decode_attempts % 100 == 1) {
-                std::cout << "    → ADJUSTING: Buffer shorter than expected, using available data (" << message_buffer.size() << " bytes)" << std::endl;
-            }
-            // Use whatever data we have available
-            msg.data_len = message_buffer.size() - 11;
-            if (msg.data_len < 0) msg.data_len = 0;
-        }
-        
-        memcpy(msg.data, &message_buffer[11], msg.data_len);
+        // Data has already been copied above based on message type
         
         // Check if this is a CZONE proprietary message embedded in NMEA2000
         // CZONE messages have PGNs 65282/65283 and start with 0x93 0x13 in the data payload
-        bool is_czone = false;
+        bool is_czone_payload = false;
         if ((msg.pgn == CZone::PGN_SWITCH_STATUS || msg.pgn == CZone::PGN_SWITCH_CONTROL) &&
             msg.data_len >= 2 && 
             msg.data[0] == CZone::PROTOCOL_MARKER_1 && 
             msg.data[1] == CZone::PROTOCOL_MARKER_2) {
-            is_czone = true;
+            is_czone_payload = true;
             if (debug_decode && decode_attempts % 100 == 1) {
                 std::cout << "    → CZONE PROPRIETARY MESSAGE in PGN " << msg.pgn << std::endl;
             }
