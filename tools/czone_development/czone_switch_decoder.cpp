@@ -475,17 +475,25 @@ public:
     }
     
     void PrintBinaryPayload(const N2KMessage& msg) {
-        if (msg.pgn != 65282 && msg.pgn != 65283) return;  // Only CZONE proprietary
-        
         std::cout << "Dev 0x" << std::hex << std::setw(2) << std::setfill('0') << (int)msg.source 
                   << " PGN " << std::dec << msg.pgn << ": ";
         
-        // Show each byte in binary
-        for (int i = 0; i < msg.data_len && i < 17; i++) {
-            for (int bit = 7; bit >= 0; bit--) {
-                std::cout << ((msg.data[i] >> bit) & 1);
+        // For CZONE messages, show in binary format
+        if (msg.pgn == 65282 || msg.pgn == 65283) {
+            // Show each byte in binary
+            for (int i = 0; i < msg.data_len && i < 17; i++) {
+                for (int bit = 7; bit >= 0; bit--) {
+                    std::cout << ((msg.data[i] >> bit) & 1);
+                }
+                if (i < msg.data_len - 1) std::cout << " ";
             }
-            if (i < msg.data_len - 1) std::cout << " ";
+        } else {
+            // For non-CZONE messages, show in hex format
+            for (int i = 0; i < msg.data_len && i < 20; i++) {
+                std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)msg.data[i] << " ";
+            }
+            if (msg.data_len > 20) std::cout << "...";
+            std::cout << std::dec;
         }
         std::cout << std::endl;
     }
@@ -498,7 +506,7 @@ public:
             std::cout << "Capturing " << count << " messages from device 0x" 
                       << std::hex << device << std::dec;
         } else {
-            std::cout << "Capturing " << count << " messages from all CZONE devices";
+            std::cout << "Capturing " << count << " messages";
         }
         
         if (pgn_filter >= 0) {
@@ -515,33 +523,35 @@ public:
                 bool pgn_match = (pgn_filter < 0) || (msg.pgn == pgn_filter);
                 if (!pgn_match) continue;
                 
-                // Check if it's a CZONE message for device and message type filtering
-                if ((msg.pgn == CZone::PGN_SWITCH_STATUS || msg.pgn == CZone::PGN_SWITCH_CONTROL)) {
-                    // Apply device filter
-                    bool device_match = (device < 0) || (msg.source == device);
-                    if (!device_match) continue;
-                    
-                    // Apply message type filter if specified
-                    bool msg_type_match = true;
-                    if (msg_type_filter >= 0) {
-                        CZoneParsedMessage parsed;
-                        if (ParseCZoneTypedMessage(msg.data, msg.data_len, msg.source, msg.pgn, parsed)) {
-                            msg_type_match = (parsed.MessageType == msg_type_filter);
-                        } else {
-                            msg_type_match = false; // Can't parse = doesn't match
-                        }
-                    }
-                    if (!msg_type_match) continue;
-                    
-                    // Message passed all filters
-                    if (binary_mode) {
-                        PrintBinaryPayload(msg);
+                // Apply device filter
+                bool device_match = (device < 0) || (msg.source == device);
+                if (!device_match) continue;
+                
+                // Check if it's a CZONE message for message type filtering
+                bool msg_type_match = true;
+                if (msg_type_filter >= 0 && (msg.pgn == CZone::PGN_SWITCH_STATUS || msg.pgn == CZone::PGN_SWITCH_CONTROL)) {
+                    // Apply message type filter if specified for CZONE messages
+                    CZoneParsedMessage parsed;
+                    if (ParseCZoneTypedMessage(msg.data, msg.data_len, msg.source, msg.pgn, parsed)) {
+                        msg_type_match = (parsed.MessageType == msg_type_filter);
                     } else {
-                        std::cout << "[" << captured + 1 << "] ";
-                        PrintMessageCompact(msg);
+                        msg_type_match = false; // Can't parse = doesn't match
                     }
-                    captured++;
+                } else if (msg_type_filter >= 0) {
+                    // Non-CZONE message with type filter - skip it
+                    continue;
                 }
+                
+                if (!msg_type_match) continue;
+                
+                // Message passed all filters - display it
+                if (binary_mode) {
+                    PrintBinaryPayload(msg);
+                } else {
+                    std::cout << "[" << captured + 1 << "] ";
+                    PrintMessageCompact(msg);
+                }
+                captured++;
             } else if (!g_running) {
                 // ReadMessage returned false due to signal interruption
                 break;
@@ -1174,31 +1184,6 @@ private:
             std::cout << std::endl;
         }
         
-        if (message_buffer.size() < 5) {
-            if (debug_decode && decode_attempts % 100 == 1) {
-                std::cout << "    → REJECTED: Too short (need 5, got " << message_buffer.size() << ")" << std::endl;
-            }
-            return false;
-        }
-        
-        // Try to parse as CZONE message
-        if (ParseCZONEMessage(message_buffer, msg)) {
-            if (debug_decode && decode_attempts % 100 == 1) {
-                std::cout << "    → CZONE PROPRIETARY FORMAT DETECTED!" << std::endl;
-                std::cout << "       Raw bytes: " << std::hex;
-                for (int i = 0; i < std::min(8, (int)message_buffer.size()); i++) {
-                    std::cout << " " << std::setfill('0') << std::setw(2) << (int)message_buffer[i];
-                }
-                std::cout << std::dec << std::endl;
-                std::cout << "       Parsed: PGN=" << msg.pgn 
-                          << " Src=0x" << std::hex << (int)msg.source
-                          << " Dst=0x" << (int)msg.destination << std::dec 
-                          << " Len=" << (int)msg.data_len << std::endl;
-            }
-            return true;
-        }
-        
-        // Standard NMEA2000 format
         if (message_buffer.size() < 11) {
             if (debug_decode && decode_attempts % 100 == 1) {
                 std::cout << "    → REJECTED: Too short for NMEA2000 (need 11, got " << message_buffer.size() << ")" << std::endl;
@@ -1206,6 +1191,7 @@ private:
             return false;
         }
         
+        // All messages from NGT-1 start with 0x93 (Actisense message type)
         if (message_buffer[0] != 0x93) {
             if (debug_decode && decode_attempts % 100 == 1) {
                 std::cout << "    → REJECTED: Wrong message type (got 0x" << std::hex << (int)message_buffer[0] << std::dec << ", need 0x93)" << std::endl;
@@ -1213,11 +1199,13 @@ private:
             return false;
         }
         
+        // Parse standard NMEA2000 format first
         msg.timestamp = std::chrono::steady_clock::now();
         msg.priority = message_buffer[2];
         msg.pgn = message_buffer[3] | (message_buffer[4] << 8) | (message_buffer[5] << 16);
         msg.destination = message_buffer[6];
         msg.source = message_buffer[7];
+        // Bytes 8-9 are timestamp (not used here)
         msg.data_len = message_buffer[10];
         
         if (msg.data_len > 223) {
@@ -1238,8 +1226,30 @@ private:
         
         memcpy(msg.data, &message_buffer[11], msg.data_len);
         
+        // Check if this is a CZONE proprietary message embedded in NMEA2000
+        // CZONE messages have PGNs 65282/65283 and start with 0x93 0x13 in the data payload
+        bool is_czone = false;
+        if ((msg.pgn == CZone::PGN_SWITCH_STATUS || msg.pgn == CZone::PGN_SWITCH_CONTROL) &&
+            msg.data_len >= 2 && 
+            msg.data[0] == CZone::PROTOCOL_MARKER_1 && 
+            msg.data[1] == CZone::PROTOCOL_MARKER_2) {
+            is_czone = true;
+            if (debug_decode && decode_attempts % 100 == 1) {
+                std::cout << "    → CZONE PROPRIETARY MESSAGE in PGN " << msg.pgn << std::endl;
+            }
+        }
+        
         if (debug_decode && decode_attempts % 100 == 1) {
-            std::cout << "    → ACCEPTED NMEA2000: PGN=" << msg.pgn << " Src=0x" << std::hex << (int)msg.source << std::dec << std::endl;
+            if (is_czone) {
+                std::cout << "    → ACCEPTED CZONE: PGN=" << msg.pgn 
+                          << " Src=0x" << std::hex << (int)msg.source
+                          << " Dst=0x" << (int)msg.destination << std::dec 
+                          << " Len=" << (int)msg.data_len << std::endl;
+            } else {
+                std::cout << "    → ACCEPTED NMEA2000: PGN=" << msg.pgn 
+                          << " Src=0x" << std::hex << (int)msg.source << std::dec 
+                          << " Len=" << (int)msg.data_len << std::endl;
+            }
         }
         
         return true;
