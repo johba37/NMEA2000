@@ -23,16 +23,13 @@ OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 CZONE (Mastervolt/Power Products) switch bank support for NMEA2000 library.
 Provides basic on/off switching functionality for CZONE digital switching systems.
 
-Based on successful reverse engineering of CZONE proprietary protocol:
-- CZONE uses proprietary message format: 93 13 XX (not standard NMEA2000)
-- CZONE PGNs: 65282-65287 (proprietary range)
-- Message structure (17 bytes total):
-  - Byte 0: Device Instance (often 0x01)
-  - Byte 1: Header Marker (0xFF)
-  - Byte 2: Device Type (varies by device)
-  - Bytes 3-6: 32-bit LE timestamp (10Hz/100ms ticks, network-wide)
-  - Byte 7: Data Length (0x08)
-  - Bytes 8-16: Payload (9 bytes, purpose unknown - likely contains switch states)
+Based on reverse engineering of CZONE protocol:
+- CZONE uses standard NMEA2000 message format with proprietary PGNs 65282-65287
+- Previous assumption that "93 13 XX" was CZONE protocol was incorrect - that's NGT-1 framing
+- Message structure analysis ongoing:
+  - Uses proprietary PGN range 65282-65287 for switch control
+  - Message payload structure still being reverse-engineered
+  - Contains device timestamps and switch state information
 */
 
 #ifndef N2kCZone_h

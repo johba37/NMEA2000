@@ -117,10 +117,21 @@ bool tNMEA2000_NGT1::CANOpen() {
     // Canboat NGT_STARTUP_SEQ: {0x11, 0x02, 0x00} via NGT_MSG_SEND (0xA1)
     unsigned char startup_data[] = {0x11, 0x02, 0x00};
     
-    if (!SendNGTMessage(startup_data, sizeof(startup_data))) {
-        std::cerr << "Failed to send NGT-1 startup sequence" << std::endl;
-        return false;
+    // Send startup sequence using NGT protocol
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(STX);
+    WriteNGT1Byte(0xA1);  // NGT_MSG_SEND command
+    WriteNGT1Byte(sizeof(startup_data));  // Length
+    
+    unsigned char checksum = 0xA1 + sizeof(startup_data);
+    for (int i = 0; i < sizeof(startup_data); i++) {
+        WriteNGT1Byte(startup_data[i]);
+        checksum += startup_data[i];
     }
+    
+    WriteNGT1Byte((unsigned char)(0x100 - checksum));  // Checksum to make sum = 0
+    WriteNGT1Byte(DLE);
+    WriteNGT1Byte(ETX);
     
     usleep(100000);  // Wait for NGT-1 to process
     std::cout << "NGT-1 initialization completed" << std::endl;
@@ -418,3 +429,4 @@ void tNMEA2000_NGT1::WriteNGT1Bytes(const unsigned char* data, int len) {
         WriteNGT1Byte(data[i]);
     }
 }
+

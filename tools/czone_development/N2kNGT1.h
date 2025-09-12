@@ -13,6 +13,7 @@ Based on patterns from NMEA2000_socketCAN library.
 
 #include "../../src/NMEA2000.h"
 #include <string>
+#include <vector>
 
 //*****************************************************************************
 // Minimal NMEA2000 transport for NGT-1 serial communication
