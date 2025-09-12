@@ -120,3 +120,31 @@ Next capture needed: timeout 20s ./tools/czone_development/czone_switch_decoder 
 - Switch state encoding location is NOT confirmed to be in any specific message type
 - Type 0x64 payloads are inconsistent between identical devices, suggesting complex encoding or additional data
 - Previous assumptions about byte positions containing switch states were incorrect
+
+## Canboat CSV Format
+
+**IMPORTANT:** The confusion observed earlier about device filtering comes from misunderstanding canboat's CSV format:
+
+```
+timestamp,priority,pgn,src,dst,len,data...
+2025-09-12T16:44:26.891Z,7,127258,36,255,8,a3,f5,77,4f,91,01,ff,ff
+```
+
+**Field Definitions:**
+- `timestamp`: ISO 8601 timestamp with milliseconds (2025-09-12T16:44:26.891Z)
+- `priority`: CAN message priority (0-7, lower = higher priority)  
+- `pgn`: Parameter Group Number (PGN) identifying the message type
+- `src`: Source device address (hex, e.g., 36 = 0x24)
+- `dst`: Destination address (255 = broadcast, specific address otherwise)
+- `len`: Data payload length in bytes
+- `data...`: Hex bytes of the actual message data
+
+**Common Mistake:** Do NOT confuse priority with source address!
+- Priority field (position 1) contains CAN bus priority (0-7)
+- Source field (position 3) contains the actual device address
+- When filtering by device ID, always use the `src` field (position 3), not priority
+
+**Examples:**
+- Device 0x12 messages: Look for `src` field = 18 (decimal) or 0x12 (hex)
+- Device 0x13 messages: Look for `src` field = 19 (decimal) or 0x13 (hex)
+- CZONE PGNs: pgn = 65282 or 65283
