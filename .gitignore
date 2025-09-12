@@ -67,6 +67,4 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 *.a
-.claude
-CLAUDE.md
-tools/czone_development/czone_switch_decoder
+tools

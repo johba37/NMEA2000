@@ -134,6 +134,24 @@ bool tNMEA2000_NGT1::CANOpen() {
     WriteNGT1Byte(ETX);
     
     usleep(100000);  // Wait for NGT-1 to process
+    
+    // Enable reception of PGN 126996 (Product Information)
+    std::cout << "Enabling PGN 126996 reception..." << std::endl;
+    
+    // NGT-1 command to enable PGN reception: 0x49 (RX_PGN command)
+    // Format: 0x49 [PGN 3 bytes little-endian]
+    unsigned char enable_pgn[] = {0x49, 0xC4, 0xEE, 0x01};  // PGN 126996 = 0x01EEC4
+    if (!SendNGTMessage(enable_pgn, sizeof(enable_pgn))) {
+        std::cerr << "Warning: Failed to enable PGN 126996" << std::endl;
+    }
+    
+    // Also enable PGN 60928 (ISO Address Claim) 
+    unsigned char enable_iso[] = {0x49, 0x00, 0xEE, 0x00};  // PGN 60928 = 0x00EE00
+    if (!SendNGTMessage(enable_iso, sizeof(enable_iso))) {
+        std::cerr << "Warning: Failed to enable PGN 60928" << std::endl;
+    }
+    
+    usleep(100000);  // Wait for configuration
     std::cout << "NGT-1 initialization completed" << std::endl;
     
     return true;

@@ -1218,10 +1218,15 @@ private:
             return false;
         }
         
-        // All messages from NGT-1 start with 0x93 (Actisense message type)
-        if (message_buffer[0] != 0x93) {
+        // Messages from NGT-1 can be:
+        // 0x93 = CZONE proprietary messages
+        // 0xA0 = Standard NMEA2000 messages
+        bool is_czone = (message_buffer[0] == 0x93);
+        bool is_n2k = (message_buffer[0] == 0xA0);
+        
+        if (!is_czone && !is_n2k) {
             if (debug_decode && decode_attempts % 100 == 1) {
-                std::cout << "    → REJECTED: Wrong message type (got 0x" << std::hex << (int)message_buffer[0] << std::dec << ", need 0x93)" << std::endl;
+                std::cout << "    → REJECTED: Unknown message type (got 0x" << std::hex << (int)message_buffer[0] << std::dec << ", need 0x93 or 0xA0)" << std::endl;
             }
             return false;
         }
